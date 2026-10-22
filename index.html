@@ -137,7 +137,7 @@
         <div class="icon">📄</div>
         <p><strong>Kéo thả hoặc bấm chọn file gốc</strong></p>
         <p class="hint">Web tự đọc &amp; tạo hitbox 3D theo file</p>
-        <input type="file" id="fileInput" accept=".txt,.json,.dump,.csv" onchange="handleFile(event)">
+        <input type="file" id="fileInput" accept="*/*" onchange="handleFile(event)">
       </div>
       <div class="file-info" id="fileInfo">
         <div class="title">✅ Đã load từ file</div>
@@ -385,38 +385,77 @@ function drawAllFileCapsules(){
 function num(str,re){const m=str.match(re);return m?parseFloat(m[1]):null}
 function parseDump(text){
   fileColliders=[];
-  const parts=text.split(/(?=-?(?:MALE|FEMALE)\s*\[)|(?=\{\s*"m_GameObject")|(?=\/\/\s*=+)/g);
-  const chunks=parts.length>1?parts:[text];
-  chunks.forEach((blk)=>{
-    if(!/m_Radius|Radius\s*=/i.test(blk))return;
-    const r=num(blk,/"m_Radius"\s*:\s*([\d.Ee+-]+)/)||num(blk,/Radius\s*=\s*([\d.Ee+-]+)/i);
-    const h=num(blk,/"m_Height"\s*:\s*([\d.Ee+-]+)/)||num(blk,/Height\s*=\s*([\d.Ee+-]+)/i);
-    const x=num(blk,/"x"\s*:\s*([\d.Ee+-]+)/)||num(blk,/Center\s*=\s*x:([\d.Ee+-]+)/i);
-    const y=num(blk,/"y"\s*:\s*([\d.Ee+-]+)/)||num(blk,/y:([\d.Ee+-]+)/i);
-    const z=num(blk,/"z"\s*:\s*([\d.Ee+-]+)/)||num(blk,/z:([\d.Ee+-]+)/i);
-    const dir=num(blk,/"m_Direction"\s*:\s*(\d)/)||0;
-    const pathId=(blk.match(/"m_PathID"\s*:\s*(-?\d+)/)||blk.match(/PathID\s*=\s*(-?\d+)/i)||[])[1];
-    let name='Collider_'+(fileColliders.length+1);
-    const nm=blk.match(/\[([^\]]{2,30})\]/)||blk.match(/\/\/\s*\[?\d*\]?\s*([A-ZÀÁẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬÉÈẺẼẸÊẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴĐ][^\n]{2,40})/i);
-    if(nm)name=(nm[1]||name).trim().substring(0,28);
-    let gender=null;
-    if(pathId===String(PATH.male))gender='male';
-    if(pathId===String(PATH.female))gender='female';
-    if(/MALE/i.test(blk)&&!/FEMALE/i.test(blk))gender=gender||'male';
-    if(/FEMALE/i.test(blk))gender='female';
+  if(!text||!text.trim()){alert('File trống hoặc không đọc được.');return}
+
+  // === Cách 1: Tách theo -MALE [NAME] / -FEMALE [NAME] ===
+  const blockRe=/-?(MALE|FEMALE)\s*\[([^\]]+)\]\s*\{([\s\S]*?)\n\}/gi;
+  let m;
+  while((m=blockRe.exec(text))!==null){
+    const gender=m[1].toLowerCase();
+    const name=(m[2]||'').trim();
+    const body=m[3]||'';
+    const r=num(body,/"m_Radius"\s*:\s*([\d.Ee+-]+)/)||num(body,/Radius\s*[=:]\s*([\d.Ee+-]+)/i);
+    const h=num(body,/"m_Height"\s*:\s*([\d.Ee+-]+)/)||num(body,/Height\s*[=:]\s*([\d.Ee+-]+)/i);
+    const x=num(body,/"x"\s*:\s*([\d.Ee+-]+)/);
+    const y=num(body,/"y"\s*:\s*([\d.Ee+-]+)/);
+    const z=num(body,/"z"\s*:\s*([\d.Ee+-]+)/);
+    const dir=num(body,/"m_Direction"\s*:\s*(\d)/)||0;
+    const pathId=(body.match(/"m_PathID"\s*:\s*(-?\d+)/)||[])[1]||null;
     if(r!=null&&h!=null){
-      fileColliders.push({name,gender,pathId:pathId||null,x:x??0.12,y:y??0.05,z:z??-0.03,r,h,dir:dir||0});
+      fileColliders.push({name:name||('Collider_'+(fileColliders.length+1)),gender,pathId,x:x??0.12,y:y??0.05,z:z??-0.03,r,h,dir:dir||0});
     }
-  });
-  if(fileColliders.length===0){
-    const r=num(text,/Radius\s*[=:]\s*([\d.Ee+-]+)/i);
-    const h=num(text,/Height\s*[=:]\s*([\d.Ee+-]+)/i);
-    const x=num(text,/[xX]\s*[=:]\s*([\d.Ee+-]+)/);
-    const y=num(text,/[yY]\s*[=:]\s*([\d.Ee+-]+)/);
-    const z=num(text,/[zZ]\s*[=:]\s*([\d.Ee+-]+)/);
-    if(r!=null)fileColliders.push({name:'FromFile',gender:null,pathId:null,r,h:h??0.12,x:x??0.12,y:y??0.05,z:z??-0.03,dir:0});
   }
-  if(fileColliders.length===0){alert('Không tìm thấy CapsuleCollider trong file.');return}
+
+  // === Cách 2: JSON blocks có m_Radius ===
+  if(fileColliders.length===0){
+    const re=/\{[^{}]*"m_Radius"\s*:\s*([\d.Ee+-]+)[^{}]*"m_Height"\s*:\s*([\d.Ee+-]+)[^{}]*"m_Center"\s*:\s*\{\s*"x"\s*:\s*([\d.Ee+-]+)\s*,\s*"y"\s*:\s*([\d.Ee+-]+)\s*,\s*"z"\s*:\s*([\d.Ee+-]+)/gi;
+    let m2; let idx=0;
+    while((m2=re.exec(text))!==null){
+      idx++;
+      // try find name before this match
+      const before=text.substring(Math.max(0,m2.index-120),m2.index);
+      let name='Collider_'+idx;
+      const nm=before.match(/\[([^\]]+)\]/)||before.match(/(MALE|FEMALE)/i);
+      if(nm)name=(nm[1]||name).trim();
+      let gender=null;
+      if(/FEMALE/i.test(before))gender='female';
+      else if(/MALE/i.test(before))gender='male';
+      fileColliders.push({name,gender,pathId:null,r:+m2[1],h:+m2[2],x:+m2[3],y:+m2[4],z:+m2[5],dir:0});
+    }
+  }
+
+  // === Cách 3: Header style Radius = ... Height = ... Center = x: y: z: ===
+  if(fileColliders.length===0){
+    const re3=/Radius\s*=\s*([\d.Ee+-]+)[\s\S]{0,80}?Height\s*=\s*([\d.Ee+-]+)[\s\S]{0,80}?Center\s*=\s*x:([\d.Ee+-]+)\s*y:([\d.Ee+-]+)\s*z:([\d.Ee+-]+)/gi;
+    let m3; let i3=0;
+    while((m3=re3.exec(text))!==null){
+      i3++;
+      const before=text.substring(Math.max(0,m3.index-100),m3.index);
+      let gender=null;
+      if(/FEMALE/i.test(before))gender='female';
+      else if(/MALE/i.test(before))gender='male';
+      fileColliders.push({name:gender?(gender.toUpperCase()+'_goc'):('FromFile_'+i3),gender,pathId:null,r:+m3[1],h:+m3[2],x:+m3[3],y:+m3[4],z:+m3[5],dir:0});
+    }
+  }
+
+  // === Cách 4: bất kỳ số Radius/Height ===
+  if(fileColliders.length===0){
+    const r=num(text,/"m_Radius"\s*:\s*([\d.Ee+-]+)/)||num(text,/Radius\s*[=:]\s*([\d.Ee+-]+)/i);
+    const h=num(text,/"m_Height"\s*:\s*([\d.Ee+-]+)/)||num(text,/Height\s*[=:]\s*([\d.Ee+-]+)/i);
+    const x=num(text,/"x"\s*:\s*([\d.Ee+-]+)/);
+    const y=num(text,/"y"\s*:\s*([\d.Ee+-]+)/);
+    const z=num(text,/"z"\s*:\s*([\d.Ee+-]+)/);
+    if(r!=null){
+      fileColliders.push({name:'FromFile',gender:null,pathId:null,r,h:h??0.12,x:x??0.12,y:y??0.05,z:z??-0.03,dir:0});
+    }
+  }
+
+  if(fileColliders.length===0){
+    alert('Không tìm thấy CapsuleCollider trong file.\\n\\nFile cần có:\\n- m_Radius / m_Height / m_Center\\nhoặc\\n- Radius = ... Height = ... Center = x: y: z:\\n\\nBạn có thể mở file bằng Notepad xem thử nội dung.');
+    console.log('FILE CONTENT PREVIEW:', text.substring(0,500));
+    return;
+  }
+  console.log('Parsed colliders:', fileColliders.length, fileColliders);
   applyFileColliders();
 }
 function applyFileColliders(){
@@ -524,7 +563,18 @@ function exportJSON(){const data=applyBoth?{male:{pathId:PATH.male,...state.male
 function exportBoth(){applyBoth=true;document.getElementById('applyBoth').checked=true;updateBothUI();updateCode();downloadTxt()}
 function saveCustom(){const name=prompt('Tên preset:','Preset của tôi');if(!name)return;const id='c_'+Date.now();PRESETS.push({id,name,desc:'Tự tạo',note:'Custom',tag:'',fromFile:false,male:{...state.male},female:{...state.female}});try{const s=JSON.parse(localStorage.getItem('hb_custom')||'[]');s.push(PRESETS[PRESETS.length-1]);localStorage.setItem('hb_custom',JSON.stringify(s))}catch(e){}currentPresetId=id;buildPresetList();alert('Đã lưu: '+name)}
 function playAnim(){if(animPlaying){animPlaying=false;document.getElementById('btnAnim').textContent='▶ Demo';return}animPlaying=true;document.getElementById('btnAnim').textContent='⏹ Dừng';const ids=PRESETS.filter(p=>!p.fromFile).map(p=>p.id).concat(['goc']);let i=0;const t=setInterval(()=>{if(!animPlaying){clearInterval(t);return}selectPreset(ids[i%ids.length]);i++;if(i>=ids.length){animPlaying=false;document.getElementById('btnAnim').textContent='▶ Demo';clearInterval(t)}},850)}
-function handleFile(e){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>parseDump(ev.target.result);r.readAsText(f)}
+function handleFile(e){
+  const f=e.target.files[0];
+  if(!f)return;
+  console.log('Loading file:', f.name, f.type, f.size);
+  const r=new FileReader();
+  r.onload=ev=>{
+    try{ parseDump(ev.target.result); }
+    catch(err){ console.error(err); alert('Lỗi đọc file: '+err.message); }
+  };
+  r.onerror=()=>alert('Không đọc được file. Thử lưu lại thành .txt (UTF-8).');
+  r.readAsText(f, 'UTF-8');
+}
 const zone=document.getElementById('uploadZone');
 zone.addEventListener('dragover',e=>{e.preventDefault();zone.classList.add('dragover')});
 zone.addEventListener('dragleave',()=>zone.classList.remove('dragover'));
